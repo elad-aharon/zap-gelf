@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -68,11 +69,18 @@ type (
 		chunkDataSize    int
 		compressionType  int
 		compressionLevel int
+		writeCloserPool  *sync.Pool
+	}
+
+	writeCloserResetter interface {
+		io.WriteCloser
+		Reset(w io.Writer)
 	}
 
 	// implement io.WriteCloser.
 	writeCloser struct {
-		*bytes.Buffer
+		err    error
+		buffer io.Writer
 	}
 
 	// implement zapcore.Core.
@@ -94,6 +102,9 @@ var (
 	// chunkedMagicBytes chunked message magic bytes.
 	// See http://docs.graylog.org/en/2.4/pages/gelf.html.
 	chunkedMagicBytes = []byte{0x1e, 0x0f}
+
+	// Ensure *writer implements zapcore.WriteSyncer.
+	_ zapcore.WriteSyncer = (*writer)(nil)
 )
 
 // NewCore zap core constructor.
@@ -136,13 +147,23 @@ func NewCore(options ...Option) (_ zapcore.Core, err error) {
 		compressionLevel: conf.compressionLevel,
 	}
 
+	w.writeCloserPool = &sync.Pool{
+		New: w.newWriteCloser,
+	}
+
 	if w.conn, err = net.Dial("udp", conf.addr); err != nil {
 		return nil, err
 	}
 
+	var ws zapcore.WriteSyncer = w
+	if len(conf.writeSyncers) > 0 {
+		var writers = append([]zapcore.WriteSyncer{w}, conf.writeSyncers...)
+		ws = zapcore.NewMultiWriteSyncer(writers...)
+	}
+
 	var core = zapcore.NewCore(
 		zapcore.NewJSONEncoder(conf.encoder),
-		zapcore.AddSync(w),
+		ws,
 		conf.enabler,
 	)
 
@@ -178,6 +199,38 @@ func Version(value string) Option {
 	})
 }
 
+// MessageKey set zapcore.EncoderConfig MessageKey property.
+func MessageKey(value string) Option {
+	return optionFunc(func(conf *optionConf) error {
+		conf.encoder.MessageKey = escapeKey(value)
+		return nil
+	})
+}
+
+// LevelKey set zapcore.EncoderConfig LevelKey property.
+func LevelKey(value string) Option {
+	return optionFunc(func(conf *optionConf) error {
+		conf.encoder.LevelKey = escapeKey(value)
+		return nil
+	})
+}
+
+// TimeKey set zapcore.EncoderConfig TimeKey property.
+func TimeKey(value string) Option {
+	return optionFunc(func(conf *optionConf) error {
+		conf.encoder.TimeKey = escapeKey(value)
+		return nil
+	})
+}
+
+// LevelAtomic set atomic logging level which can be changed dynamically.
+func LevelAtomic(level zap.AtomicLevel) Option {
+	return optionFunc(func(conf *optionConf) (err error) {
+		conf.enabler = level
+		return nil
+	})
+}
+
 // NameKey set zapcore.EncoderConfig NameKey property.
 func NameKey(value string) Option {
 	return optionFunc(func(conf *optionConf) error {
@@ -190,6 +243,30 @@ func NameKey(value string) Option {
 func CallerKey(value string) Option {
 	return optionFunc(func(conf *optionConf) error {
 		conf.encoder.CallerKey = escapeKey(value)
+		return nil
+	})
+}
+
+// FunctionKey set zapcore.EncoderConfig FunctionKey property.
+func FunctionKey(value string) Option {
+	return optionFunc(func(conf *optionConf) error {
+		conf.encoder.FunctionKey = escapeKey(value)
+		return nil
+	})
+}
+
+// StacktraceKey set zapcore.EncoderConfig StacktraceKey property.
+func StacktraceKey(value string) Option {
+	return optionFunc(func(conf *optionConf) error {
+		conf.encoder.StacktraceKey = escapeKey(value)
+		return nil
+	})
+}
+
+// SkipLineEnding set zapcore.EncoderConfig SkipLineEnding property.
+func SkipLineEnding(value bool) Option {
+	return optionFunc(func(conf *optionConf) error {
+		conf.encoder.SkipLineEnding = value
 		return nil
 	})
 }
@@ -222,6 +299,22 @@ func EncodeCaller(value zapcore.CallerEncoder) Option {
 func EncodeName(value zapcore.NameEncoder) Option {
 	return optionFunc(func(conf *optionConf) error {
 		conf.encoder.EncodeName = value
+		return nil
+	})
+}
+
+// WriteSyncers sets additional zapcore.WriteSyncers on the core.
+func WriteSyncers(value ...zapcore.WriteSyncer) Option {
+	return optionFunc(func(conf *optionConf) error {
+		conf.writeSyncers = append(conf.writeSyncers, value...)
+		return nil
+	})
+}
+
+// NewReflectedEncoder set zapcore.EncoderConfig NewReflectedEncoder property.
+func NewReflectedEncoder(value func(io.Writer) zapcore.ReflectedEncoder) Option {
+	return optionFunc(func(conf *optionConf) error {
+		conf.encoder.NewReflectedEncoder = value
 		return nil
 	})
 }
@@ -285,28 +378,22 @@ func CompressionLevel(value int) Option {
 // Write implements io.Writer.
 func (w *writer) Write(buf []byte) (n int, err error) {
 	var (
-		cw   io.WriteCloser
+		cw   writeCloserResetter
 		cBuf bytes.Buffer
 	)
 
-	switch w.compressionType {
-	case CompressionNone:
-		cw = &writeCloser{&cBuf}
-	case CompressionGzip:
-		cw, err = gzip.NewWriterLevel(&cBuf, w.compressionLevel)
-	case CompressionZlib:
-		cw, err = zlib.NewWriterLevel(&cBuf, w.compressionLevel)
-	}
+	cw = w.writeCloserPool.Get().(writeCloserResetter)
 
-	if err != nil {
-		return 0, err
-	}
+	cw.Reset(&cBuf)
 
 	if n, err = cw.Write(buf); err != nil {
 		return n, err
 	}
 
-	cw.Close()
+	if cw.Close() == nil {
+		w.writeCloserPool.Put(cw)
+	}
+	cw = nil
 
 	var cBytes = cBuf.Bytes()
 	if count := w.chunkCount(cBytes); count > 1 {
@@ -324,9 +411,41 @@ func (w *writer) Write(buf []byte) (n int, err error) {
 	return n, nil
 }
 
+// Sync is a no-op, but required to implement the zapcore.WriteSyncer interface.
+func (w *writer) Sync() error {
+	return nil
+}
+
+func (w *writer) newWriteCloser() (cw interface{}) {
+	var err error
+	switch w.compressionType {
+	case CompressionNone:
+		cw = &writeCloser{nil, nil}
+	case CompressionGzip:
+		cw, err = gzip.NewWriterLevel(nil, w.compressionLevel)
+	case CompressionZlib:
+		cw, err = zlib.NewWriterLevel(nil, w.compressionLevel)
+	}
+	if err != nil {
+		cw = &writeCloser{err, nil}
+	}
+	return cw
+}
+
 // Close implementation of io.WriteCloser.
 func (*writeCloser) Close() error {
 	return nil
+}
+
+func (wc *writeCloser) Reset(buffer io.Writer) {
+	wc.buffer = buffer
+}
+
+func (wc *writeCloser) Write(p []byte) (n int, err error) {
+	if wc.err != nil {
+		return 0, err
+	}
+	return wc.buffer.Write(p)
 }
 
 // Enabled implementation of zapcore.Core.

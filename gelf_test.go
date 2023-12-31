@@ -1,13 +1,15 @@
 package gelf_test
 
 import (
+	"encoding/json"
+	"io"
+	"os"
 	"testing"
 
+	gelf "github.com/snovichkov/zap-gelf"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-
-	gelf "github.com/snovichkov/zap-gelf"
 )
 
 func TestAddr(t *testing.T) {
@@ -37,6 +39,33 @@ func TestVersion(t *testing.T) {
 	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
 }
 
+func TestMessageKey(t *testing.T) {
+	var core, err = gelf.NewCore(
+		gelf.MessageKey("custom_message"),
+	)
+
+	assert.Nil(t, err, "Unexpected error")
+	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+}
+
+func TestLevelKey(t *testing.T) {
+	var core, err = gelf.NewCore(
+		gelf.LevelKey("custom_level"),
+	)
+
+	assert.Nil(t, err, "Unexpected error")
+	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+}
+
+func TestTimeKey(t *testing.T) {
+	var core, err = gelf.NewCore(
+		gelf.TimeKey("custom_time"),
+	)
+
+	assert.Nil(t, err, "Unexpected error")
+	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+}
+
 func TestNameKey(t *testing.T) {
 	var core, err = gelf.NewCore(
 		gelf.NameKey("custom_name"),
@@ -49,6 +78,33 @@ func TestNameKey(t *testing.T) {
 func TestCallerKey(t *testing.T) {
 	var core, err = gelf.NewCore(
 		gelf.CallerKey("custom_caller"),
+	)
+
+	assert.Nil(t, err, "Unexpected error")
+	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+}
+
+func TestFunctionKey(t *testing.T) {
+	var core, err = gelf.NewCore(
+		gelf.FunctionKey("custom_function"),
+	)
+
+	assert.Nil(t, err, "Unexpected error")
+	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+}
+
+func TestStacktraceKey(t *testing.T) {
+	var core, err = gelf.NewCore(
+		gelf.StacktraceKey("custom_stacktrace"),
+	)
+
+	assert.Nil(t, err, "Unexpected error")
+	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+}
+
+func TestSkipLineEnding(t *testing.T) {
+	var core, err = gelf.NewCore(
+		gelf.SkipLineEnding(true),
 	)
 
 	assert.Nil(t, err, "Unexpected error")
@@ -91,22 +147,66 @@ func TestEncodeName(t *testing.T) {
 	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
 }
 
-func TestLevel(t *testing.T) {
+func TestWriteSyncers(t *testing.T) {
 	var core, err = gelf.NewCore(
-		gelf.Level(zap.DebugLevel),
+		gelf.WriteSyncers(os.Stderr),
 	)
 
 	assert.Nil(t, err, "Unexpected error")
 	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
 }
 
-func TestLevelString(t *testing.T) {
+func TestNewReflectedEncoder(t *testing.T) {
+	var newEncoder = func(writer io.Writer) zapcore.ReflectedEncoder {
+		return json.NewEncoder(writer)
+	}
 	var core, err = gelf.NewCore(
-		gelf.LevelString("debug"),
+		gelf.NewReflectedEncoder(newEncoder),
 	)
 
 	assert.Nil(t, err, "Unexpected error")
 	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+}
+
+func TestLevel(t *testing.T) {
+	var core, err = gelf.NewCore(
+		gelf.Level(zap.ErrorLevel),
+	)
+
+	assert.Nil(t, err, "Unexpected error")
+	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+	assert.True(t, core.Enabled(zap.ErrorLevel))
+	assert.False(t, core.Enabled(zap.WarnLevel))
+}
+
+func TestLevelString(t *testing.T) {
+	var core, err = gelf.NewCore(
+		gelf.LevelString("error"),
+	)
+
+	assert.Nil(t, err, "Unexpected error")
+	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+	assert.True(t, core.Enabled(zap.ErrorLevel))
+	assert.False(t, core.Enabled(zap.WarnLevel))
+}
+
+func TestLevelAtomic(t *testing.T) {
+	atomicLevel := zap.NewAtomicLevel()
+	atomicLevel.SetLevel(zap.ErrorLevel)
+
+	var core, err = gelf.NewCore(
+		gelf.LevelAtomic(atomicLevel),
+	)
+
+	assert.Nil(t, err, "Unexpected error")
+	assert.Implements(t, (*zapcore.Core)(nil), core, "Expect zapcore.Core")
+	assert.True(t, core.Enabled(zap.ErrorLevel))
+	assert.False(t, core.Enabled(zap.WarnLevel))
+
+	atomicLevel.SetLevel(zap.WarnLevel)
+
+	assert.True(t, core.Enabled(zap.ErrorLevel))
+	assert.True(t, core.Enabled(zap.WarnLevel))
 }
 
 func TestChunkSize(t *testing.T) {
