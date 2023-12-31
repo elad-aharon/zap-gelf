@@ -6,11 +6,10 @@ import (
 	"os"
 	"testing"
 
+	gelf "github.com/snovichkov/zap-gelf"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-
-	gelf "github.com/snovichkov/zap-gelf"
 )
 
 func TestAddr(t *testing.T) {
