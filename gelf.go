@@ -466,7 +466,7 @@ func (w *wrappedCore) Enabled(l zapcore.Level) bool {
 
 // With implementation of zapcore.Core.
 func (w *wrappedCore) With(fields []zapcore.Field) zapcore.Core {
-	return &wrappedCore{core: w.core.With(w.escape(fields))}
+	return &wrappedCore{core: w.core.With(w.escape(fields)), logLevelName: w.logLevelName}
 }
 
 // Check implementation of zapcore.Core.
