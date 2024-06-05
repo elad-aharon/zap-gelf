@@ -57,6 +57,7 @@ type (
 		writeSyncers     []zapcore.WriteSyncer
 		compressionType  int
 		compressionLevel int
+		logLevelName     bool
 	}
 
 	// optionFunc wraps a func so it satisfies the Option interface.
@@ -85,7 +86,8 @@ type (
 
 	// implement zapcore.Core.
 	wrappedCore struct {
-		core zapcore.Core
+		core         zapcore.Core
+		logLevelName bool
 	}
 )
 
@@ -172,6 +174,7 @@ func NewCore(options ...Option) (_ zapcore.Core, err error) {
 			zap.String("host", conf.host),
 			zap.String("version", conf.version),
 		}),
+		logLevelName: conf.logLevelName,
 	}, nil
 }
 
@@ -375,6 +378,14 @@ func CompressionLevel(value int) Option {
 	})
 }
 
+// LogLevelName hide level name in the message.
+func LogLevelName(value bool) Option {
+	return optionFunc(func(conf *optionConf) error {
+		conf.logLevelName = value
+		return nil
+	})
+}
+
 // Write implements io.Writer.
 func (w *writer) Write(buf []byte) (n int, err error) {
 	var (
@@ -469,6 +480,9 @@ func (w *wrappedCore) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.
 
 // Write implementation of zapcore.Core.
 func (w *wrappedCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
+	if w.logLevelName {
+		fields = append(fields, zap.String("level_name", e.Level.String()))
+	}
 	return w.core.Write(e, w.escape(fields))
 }
 
