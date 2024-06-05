@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	gelf "github.com/snovichkov/zap-gelf"
+	gelf "github.com/elad-aharon/zap-gelf"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
